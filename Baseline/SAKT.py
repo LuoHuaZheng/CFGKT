@@ -3,9 +3,9 @@ import torch.nn as nn
 import numpy as np
 
 
-class SAKTModel(nn.Module):
+class SAKT(nn.Module):
     def __init__(self, n_skill, emb_dim, num_heads, max_len, device, dropout=0.2):
-        super(SAKTModel, self).__init__()
+        super(SAKT, self).__init__()
         self.n_skill = n_skill
         self.emb_dim = emb_dim
         self.num_heads = num_heads
