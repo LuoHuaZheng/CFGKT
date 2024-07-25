@@ -4,7 +4,6 @@ import torch.nn.functional as F
 from torch.autograd import Variable
 
 device = "cpu" if not torch.cuda.is_available() else "cuda"
-# device = 'cpu'
 
 class KQN(nn.Module):
     # n_skills: number of skills in dataset
