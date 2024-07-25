@@ -10,47 +10,43 @@ import seaborn
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-class Dim(IntEnum):
-    batch = 0
-    seq = 1
-    feature = 2
 
 class CFGKT(nn.Module):
-    def __init__(self, n_question, n_pid, d_model, n_blocks,
+    def __init__(self, n_concepts, n_pid, d_model, n_blocks,
                  kq_same, dropout, model_type, memory_size,final_fc_dim,
-                 n_heads, d_ff,time,interval, separate_qa=False,attn_=True):
+                 n_heads, d_ff,time,interval, separate_qa=False,attn=True):
         super().__init__()
         '''
         CFGKT consists of the state-enhanced embedding, the coarse-grained memory, the fine-grained memory, and 
         the state fusion attention. 
         '''
-        self.n_question = n_question
+        self.n_concepts = n_concepts
         self.dropout = dropout
         self.kq_same = kq_same  # Whether k and q come from the same learning sequence.
-        self.n_pid = n_pid  # Represent the answers as two vectors or a embedding matrix.
+        self.n_pid = n_pid
         self.model_type = model_type
         self.separate_qa = separate_qa
-        self.time = time
+        self.spent = time
         self.interval = interval
         self.d_model = d_model
-        self.attn_ = attn_
+        self.attn = attn
 
         # Whether to represent the discrepancy in exercises and answers.
         if self.n_pid > 0:
             self.difficult_param = nn.Embedding(self.n_pid + 1, 1)
-            self.q_embed_diff = nn.Embedding(self.n_question + 1, self.d_model)
-            self.qa_embed_diff = nn.Embedding(2 * self.n_question + 1, self.d_model)
+            self.q_embed_diff = nn.Embedding(self.n_concepts + 1, self.d_model)
+            self.qa_embed_diff = nn.Embedding(2 * self.n_concepts + 1, self.d_model)
 
-        self.q_embed = nn.Embedding(self.n_question + 1, self.d_model)
-        self.qa_embed = nn.Embedding(2 * self.n_question + 2, self.d_model)
+        self.q_embed = nn.Embedding(self.n_concepts + 1, self.d_model)
+        self.qa_embed = nn.Embedding(2 * self.n_concepts + 2, self.d_model)
         self.interval_embed = nn.Embedding(self.interval + 2,self.d_model,padding_idx=self.interval + 1)
-        self.time_embed = nn.Embedding(self.time + 2,self.d_model,padding_idx=self.time + 1)
+        self.spent_embed = nn.Embedding(self.spent + 2,self.d_model,padding_idx=self.spent + 1)
         self.decoder_map = nn.Linear(self.d_model * 3,self.d_model)
         self.encoder_map = nn.Linear(self.d_model * 3,self.d_model)
 
         self.unit = exp_acq(dropout,self.d_model)
         self.rnn_attn_map = nn.Linear(self.d_model * 2, self.d_model)
-        self.trans = Architecture(n_question=n_question, n_blocks=n_blocks, n_heads=n_heads,
+        self.trans = Architecture(n_concepts=n_concepts, n_blocks=n_blocks, n_heads=n_heads,
                                   dropout=dropout, d_model=self.d_model, d_feature=self.d_model / n_heads,
                                   d_ff=d_ff, kq_same=self.kq_same, model_type=self.model_type)
         self.rnn_chose = nn.Linear(self.d_model, self.d_model)
@@ -60,8 +56,8 @@ class CFGKT(nn.Module):
         self.MS = nn.Parameter(torch.Tensor(memory_size, self.d_model))
         kaiming_normal_(self.MS)
 
-        self.final_final_attn = my_MultiheadAttention_distilling(self.d_model, n_heads, device)
-        if self.attn_ == True:
+        self.state_fusion = fusion_attn(self.d_model, n_heads, device)
+        if self.attn == True:
             self.final_attn = nn.MultiheadAttention(embed_dim=self.d_model, num_heads=4, dropout=dropout, batch_first=True)
         self.rnn_a = nn.Linear(self.d_model, self.d_model)
         self.attn_a = nn.Linear(self.d_model, self.d_model)
@@ -77,7 +73,7 @@ class CFGKT(nn.Module):
 
     def reset(self):
         for p in self.parameters():
-            if p.size(0) == self.n_pid+1 and self.n_pid > 0:
+            if p.size(0) == self.n_pid + 1 and self.n_pid > 0:
                 torch.nn.init.constant_(p, 0.)
 
     def forward(self, q_data, qa_data, target, pid_data,dotime, lagtime):
@@ -87,8 +83,8 @@ class CFGKT(nn.Module):
         if self.separate_qa:
             qa_embed_data = self.qa_embed(qa_data)
         else:
-            qa_data = (qa_data-q_data) // self.n_question
-            qa_embed_data = self.qa_embed(qa_data)+q_embed_data
+            qa_data = (qa_data-q_data) // self.n_concepts
+            qa_embed_data = self.qa_embed(qa_data) + q_embed_data
 
         # Embed the discrepancy over exercises and answers via the Rasch model.
         if self.n_pid > 0:
@@ -107,32 +103,30 @@ class CFGKT(nn.Module):
         q_embed_data = self.encoder_map(torch.cat((q_embed_data, in_dotime, in_lagtime),dim=-1))
         qa_embed_data = self.decoder_map(torch.cat((qa_embed_data, in_dotime, in_lagtime),dim=-1))
 
-        # This is the process of CFG for proficiency.
+        # This is the process of CGB for proficiency.
         trans_output = self.trans(q_embed_data, qa_embed_data)
 
-        # This is the prosess of FGM for experience.
-        qaqa_emb = self.qa_embed(torch.LongTensor([2 * self.n_question])).repeat(qa_embed_data.size(0),1,1)
-        qaqa_emb = torch.cat((qaqa_emb, qa_embed_data[:, :-1, :]), dim=1)
+        # This is the prosess of FGB for experience.
         unit_out = self.unit(q_embed_data, qa_embed_data)
 
-        # Write & Read the proficiency and experience with the external memories.
+        # Write & Read the proficiency and experience within the external memories.
         trans_output = self.cgm(q_embed_data, trans_output, self.MS)
         unit_out = self.fgm(q_embed_data, unit_out, self.MS)
 
         # This is the state-fusion attention mechanism.
         mask = ut_mask(unit_out.size(1))
-        trans_output = self.final_final_attn(unit_out, trans_output, qaqa_emb)
-        trans_output, _ = self.final_attn(unit_out, trans_output, qaqa_emb, attn_mask=mask)
-
+        trans_output = self.state_fusion(unit_out, trans_output, qa_embed_data)
+        if self.attn = 'Ture'
+            trans_output, _ = self.final_attn(unit_out, trans_output, qa_embed_data, attn_mask=mask)
         # Predict students' performance on current question via the mlp layer.
         concat_q = torch.cat([trans_output, q_embed_data], dim=-1)
         output = self.mlp(concat_q)
         x = torch.sigmoid(output)
         return x.squeeze(-1)
 
-class my_MultiheadAttention_distilling(nn.Module):
+class fusion_attn(nn.Module):
     def __init__(self, hid_dim, n_heads, device):
-        super(my_MultiheadAttention_distilling, self).__init__()
+        super(fusion_attn, self).__init__()
         self.hid_dim = hid_dim
         self.n_heads = n_heads
         assert hid_dim % n_heads == 0
@@ -295,7 +289,7 @@ class ext_mem(nn.Module):
         return (w.unsqueeze(-1) * final_mem[:, :-1]).sum(-2)
 
 class Architecture(nn.Module):
-    def __init__(self, n_question,  n_blocks, d_model, d_feature,
+    def __init__(self, n_concepts,  n_blocks, d_model, d_feature,
                  d_ff, n_heads, dropout, kq_same, model_type):
         super(Architecture, self).__init__()
         '''
