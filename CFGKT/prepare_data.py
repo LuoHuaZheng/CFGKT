@@ -32,8 +32,8 @@ class CFGKT_dataset(Dataset):
         timestamp = np.array(list(map(int, timestamp)))
         spendtime = np.array(list(map(int, spendtime)))
 
-        skill = np.ones(self.max_seq) * self.n_ques
-        skill[:len(q)] = q
+        ques = np.ones(self.max_seq) * self.n_ques
+        ques[:len(q)] = q
 
         concept = np.ones(self.max_seq) * self.n_concept
         concept[:len(q)] = c
@@ -66,5 +66,5 @@ class CFGKT_dataset(Dataset):
         qa = np.ones(self.max_seq) * (self.n_concept * 2 + 1)
         qa[:len(c)] = c + a * self.n_concept
         qa[len(c) - 1] = self.n_concept * 2 + 1
-        return (torch.LongTensor(qa), torch.LongTensor(skill), torch.LongTensor(labels), torch.FloatTensor(mask),
+        return (torch.LongTensor(qa), torch.LongTensor(ques), torch.LongTensor(labels), torch.FloatTensor(mask),
                 torch.LongTensor(concept), torch.LongTensor(spent), interval)
