@@ -2,7 +2,6 @@ import torch
 from torch.nn.init import xavier_uniform_
 from torch.nn.init import constant_
 import math
-from enum import IntEnum
 from torch.nn import Module, Embedding, LSTM, Linear, Dropout, LayerNorm, TransformerEncoder, TransformerEncoderLayer, MultiLabelMarginLoss, MultiLabelSoftMarginLoss, CrossEntropyLoss, BCELoss, MultiheadAttention
 from torch import nn
 from torch.nn import Module, Embedding, Linear, Dropout, MaxPool1d, Sequential, ReLU
@@ -26,28 +25,12 @@ class transformer_FFN(Module):
     def forward(self, in_fea):
         return self.FFN(in_fea)
 
-def ut_mask(seq_len):
-    return torch.triu(torch.ones(seq_len,seq_len),diagonal=1).to(dtype=torch.bool).to(device)
-
-def lt_mask(seq_len):
-    return torch.tril(torch.ones(seq_len,seq_len),diagonal=-1).to(dtype=torch.bool).to(device)
-
-def pos_encode(seq_len):
-    return torch.arange(seq_len).unsqueeze(0).to(device)
-
-def get_clones(module, N):
-    return nn.ModuleList([copy.deepcopy(module) for _ in range(N)])
-
-class Dim(IntEnum):
-    batch = 0
-    seq = 1
-    feature = 2
 
 class sparseKT(nn.Module):
     def __init__(self, n_question, n_pid,
                  d_model, n_blocks, dropout, seq_len,d_ff=256,
                  loss1=0.5, loss2=0.5, loss3=0.5, start=50, num_layers=2, nheads=4,
-                 kq_same=1, final_fc_dim=256, final_fc_dim2=256, num_attn_heads=4, separate_qa=False, l2=1e-5,
+                 kq_same=1, final_fc_dim=512, final_fc_dim2=512, num_attn_heads=4, separate_qa=False, l2=1e-5,
                  emb_type="qid", sparse_ratio=0.8, k_index=8, stride=1):
         super().__init__()
         self.model_name = "sparsekt"
@@ -76,9 +59,9 @@ class sparseKT(nn.Module):
             # n_question+1 ,d_model
             self.q_embed = nn.Embedding(self.n_question+1, embed_l).to(device)
             if self.separate_qa:
-                self.qa_embed = nn.Embedding(50000, embed_l).to(device)
+                self.qa_embed = nn.Embedding(2 * n_pid + 2, embed_l).to(device)
             else:  # false default
-                self.qa_embed = nn.Embedding(50000, embed_l).to(device)
+                self.qa_embed = nn.Embedding(2, embed_l).to(device)
         # Architecture Object. It contains stack of attention block
         self.model = Architecture(n_question=n_question, n_blocks=n_blocks, n_heads=num_attn_heads, dropout=dropout,
                                   d_model=d_model, d_feature=d_model / num_attn_heads, d_ff=d_ff, kq_same=self.kq_same,
